@@ -5,6 +5,8 @@ import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
+import scala.Tuple2;
+import scala.Tuple3;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -31,29 +33,25 @@ public class Application {
         JavaRDD<LogEntry> input = jsc.textFile(HDFS_URL + args[0])
                 .map(Application::convertStringToLogEntry)
                 .filter(Objects::nonNull);
-        Dataset<Row> dataSet = session.createDataFrame(input, LogEntry.class);
 
         // Task 1
-        dataSet.filter(col("returnCode").between(500, 599))
-                .groupBy("request")
-                .count()
-                .select("request", "count")
-                .sort(desc("count"))
+        input.filter(log -> Integer.valueOf(log.getReturnCode()) >= 500 &&
+                Integer.valueOf(log.getReturnCode()) <= 599)
+                .mapToPair(log -> new Tuple2<>(log.getRequest(), 1))
+                .reduceByKey(Integer::sum)
                 .coalesce(1)
-                .toJavaRDD()
                 .saveAsTextFile(HDFS_URL + OUTPUT1_FOLDER_NAME);
 
         // Task 2
-        dataSet.groupBy("method", "returnCode", "date")
-                .count()
-                .filter(col("count").geq(10))
-                .select("date", "method", "returnCode", "count")
-                .sort("date")
+        input.mapToPair(log ->
+                new Tuple2<>(new Tuple3<>(log.getDate(), log.getMethod(), log.getReturnCode()), 1))
+                .reduceByKey(Integer::sum)
+                .filter(f -> f._2() >= 10)
                 .coalesce(1)
-                .toJavaRDD()
                 .saveAsTextFile(HDFS_URL + OUTPUT2_FOLDER_NAME);
 
         // Task 3
+        Dataset<Row> dataSet = session.createDataFrame(input, LogEntry.class);
         dataSet.filter(col("returnCode").between(400, 599))
                 .groupBy(window(to_date(col("date"), OUTPUT_DATE_FORMAT), "1 week", "1 day"))
                 .count()
